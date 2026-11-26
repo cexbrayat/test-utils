@@ -1,9 +1,47 @@
 import path from 'path'
-import { defineConfig } from 'vitest/config'
+import {
+  type TestProjectInlineConfiguration,
+  defineConfig
+} from 'vitest/config'
 import { playwright } from '@vitest/browser-playwright'
 import vue from '@vitejs/plugin-vue'
 import jsx from '@vitejs/plugin-vue-jsx'
 import Components from 'unplugin-vue-components/vite'
+
+const browserProject = {
+  extends: true,
+  // The browser compiler emits `with` statements. In compileSlots,
+  // __BROWSER__ adds strict mode, which would reject that generated code.
+  define: {
+    __BROWSER__: false,
+    __USE_PREFIX_IDENTIFIERS__: false
+  },
+  optimizeDeps: {
+    // Keep the browser compiler from being prebundled with Node compiler dependencies.
+    exclude: ['@vue/compiler-core', '@vue/compiler-dom']
+  },
+  resolve: {
+    alias: [
+      // Inline template fixtures need the compiler-enabled Vue runtime.
+      { find: /^vue$/, replacement: 'vue/dist/vue.esm-bundler.js' }
+    ]
+  },
+  test: {
+    name: 'browser',
+    include: ['tests/**/*.spec.ts?(x)'],
+    exclude: [
+      // SSR requires the Node environment.
+      'tests/renderToString.spec.ts'
+    ],
+    browser: {
+      enabled: true,
+      headless: true,
+      screenshotFailures: false,
+      provider: playwright(),
+      instances: [{ browser: 'chromium' }]
+    }
+  }
+} satisfies TestProjectInlineConfiguration
 
 export default defineConfig(({ mode }) => ({
   plugins: [
@@ -36,38 +74,30 @@ export default defineConfig(({ mode }) => ({
           include: ['tests/**/*.spec.ts?(x)']
         }
       },
+      browserProject,
       {
         extends: true,
-        // The browser compiler emits `with` statements. In compileSlots,
-        // __BROWSER__ adds strict mode, which would reject that generated code.
-        define: {
-          __BROWSER__: false,
-          __USE_PREFIX_IDENTIFIERS__: false
-        },
-        optimizeDeps: {
-          // Keep the browser compiler from being prebundled with Node compiler dependencies.
-          exclude: ['@vue/compiler-core', '@vue/compiler-dom']
-        },
         resolve: {
           alias: [
-            // Inline template fixtures need the compiler-enabled Vue runtime.
-            { find: /^vue$/, replacement: 'vue/dist/vue.esm-bundler.js' }
+            // Vue's Node build has no Vapor runtime: use the ESM bundler builds.
+            { find: /^vue$/, replacement: 'vue/dist/vue.esm-bundler.js' },
+            {
+              find: /^@vue\/(runtime-dom|runtime-core|reactivity|shared)$/,
+              replacement: '@vue/$1/dist/$1.esm-bundler.js'
+            }
           ]
         },
         test: {
-          name: 'browser',
-          include: ['tests/**/*.spec.ts?(x)'],
-          exclude: [
-            // SSR requires the Node environment.
-            'tests/renderToString.spec.ts'
-          ],
-          browser: {
-            enabled: true,
-            headless: true,
-            screenshotFailures: false,
-            provider: playwright(),
-            instances: [{ browser: 'chromium' }]
-          }
+          name: 'vapor',
+          include: ['tests/vapor/**/*.test.ts']
+        }
+      },
+      {
+        ...browserProject,
+        test: {
+          ...browserProject.test,
+          name: 'vapor-browser',
+          include: ['tests/vapor/**/*.test.ts']
         }
       }
     ],

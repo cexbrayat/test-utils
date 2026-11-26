@@ -1,14 +1,22 @@
-import type { ComponentPublicInstance, DefineComponent, VNode } from 'vue'
+import type {
+  ComponentPublicInstance,
+  DefineComponent,
+  DirectiveModifiers,
+  VNode
+} from 'vue'
 import type {
   ComponentExposed,
   ComponentProps,
   ComponentSlots
 } from 'vue-component-type-helpers'
 import { createInstance } from './createInstance'
-import type { MountingOptions } from './types'
+import type { GlobalMountOptions, MountingOptions } from './types'
 import { trackInstance } from './utils/autoUnmount'
 import type { VueWrapper } from './vueWrapper'
 import { createVueWrapper } from './wrapperFactory'
+import { VaporWrapper } from './vaporWrapper'
+import type { VaporInstance } from './utils/getRootNodes'
+import { removeEventHistory } from './emit'
 
 type ShimSlotReturnType<T> = T extends (...args: infer P) => any
   ? (...args: P) => any
@@ -19,10 +27,24 @@ type WithArray<T> = T | T[]
 // eslint-disable-next-line @typescript-eslint/no-empty-object-type
 type ComponentData<T> = T extends { data?(...args: any): infer D } ? D : {}
 
+// Keep the Vapor directive signature structural for Vue 3.5 consumers.
+type VaporDirective = (
+  el: any,
+  getter?: () => any,
+  arg?: () => any,
+  modifiers?: DirectiveModifiers
+) => (() => void) | void
+
 export type ComponentMountingOptions<
   T,
-  P extends ComponentProps<T> = ComponentProps<T>
-> = Omit<MountingOptions<P, ComponentData<T>>, 'slots'> & {
+  P extends ComponentProps<T> = ComponentProps<T>,
+  Vapor extends boolean = false
+> = Omit<MountingOptions<P, ComponentData<T>>, 'slots' | 'global'> & {
+  global?: Vapor extends true
+    ? Omit<GlobalMountOptions, 'directives'> & {
+        directives?: Record<string, VaporDirective>
+      }
+    : GlobalMountOptions
   slots?: {
     [K in keyof ComponentSlots<T>]?: WithArray<
       | ShimSlotReturnType<ComponentSlots<T>[K]>
@@ -33,6 +55,14 @@ export type ComponentMountingOptions<
     >
   }
 } & Record<string, unknown>
+
+// A Vapor wrapper's vm only holds defineExpose() bindings. DefineComponent and
+// defineVaporComponent types resolve to instance types instead, so fall back to
+// an untyped record for them (checked structurally to support Vue 3.5 types).
+type VaporExposed<C> =
+  ComponentExposed<C> extends { $props: any } | { vapor: true }
+    ? Record<string, unknown>
+    : ComponentExposed<C>
 
 export function mount<
   T,
@@ -45,25 +75,37 @@ export function mount<
             : Props
         >
       : DefineComponent,
-  P extends ComponentProps<C> = ComponentProps<C>
+  P extends ComponentProps<C> = ComponentProps<C>,
+  Vapor extends boolean = false
 >(
   originalComponent: T,
   // the bare `P` lets TypeScript infer a union of props objects as a whole
-  options?: ComponentMountingOptions<C, P> & { props?: P | null }
-): VueWrapper<
-  ComponentProps<C> & ComponentData<C> & ComponentExposed<C>,
-  ComponentPublicInstance<
-    ComponentProps<C>,
-    ComponentData<C> & ComponentExposed<C> & Omit<P, keyof ComponentProps<C>>
-  >
->
+  options?: ComponentMountingOptions<C, P, Vapor> & {
+    props?: P | null
+    experimentalVapor?: Vapor
+  }
+): Vapor extends true
+  ? VaporWrapper<VaporExposed<C>, ComponentProps<C>>
+  : VueWrapper<
+      ComponentProps<C> & ComponentData<C> & ComponentExposed<C>,
+      ComponentPublicInstance<
+        ComponentProps<C>,
+        ComponentData<C> &
+          ComponentExposed<C> &
+          Omit<P, keyof ComponentProps<C>>
+      >
+    >
 
 // implementation
 export function mount(
   inputComponent: any,
-  options?: MountingOptions<any> & Record<string, any>
-): VueWrapper<any> {
-  const { app, props, componentRef } = createInstance(inputComponent, options)
+  options?: ComponentMountingOptions<any, any, boolean>
+): VueWrapper<any> | VaporWrapper {
+  // Registration treats directives opaquely; Vue invokes their renderer-specific signature.
+  const { app, props, componentRef } = createInstance(
+    inputComponent,
+    options as MountingOptions<any> | undefined
+  )
 
   const setProps = (newProps: Record<string, unknown>) => {
     for (const [k, v] of Object.entries(newProps)) {
@@ -124,9 +166,24 @@ export function mount(
   const vm = app.mount(el)
   if (errorsOnMount.length) {
     // If several errors are thrown during mount, then throw the first one
+    if (options?.experimentalVapor) {
+      try {
+        app.unmount()
+      } finally {
+        removeEventHistory(vm)
+      }
+    }
     throw errorsOnMount[0]
   }
   app.config.errorHandler = originalErrorHandler
+
+  if (options?.experimentalVapor) {
+    // Vapor template refs expose bindings, not a ComponentPublicInstance.
+    const instance = vm.$.subTree.component as unknown as VaporInstance
+    const wrapper = new VaporWrapper(app, vm, instance, el, setProps)
+    trackInstance(wrapper)
+    return wrapper
+  }
 
   const appRef = componentRef.value! as ComponentPublicInstance
   // we add `hasOwnProperty` so Jest can spy on the proxied vm without throwing

@@ -27,6 +27,7 @@ import { find, matches } from './utils/find'
 import { createWrapperError } from './errorWrapper'
 import { isElementVisible } from './utils/isElementVisible'
 import { isElement } from './utils/isElement'
+import { isVaporInstance } from './utils/getRootNodes'
 import type { DOMWrapper } from './domWrapper'
 import { createDOMWrapper, createVueWrapper } from './wrapperFactory'
 import { stringifyNode } from './utils/stringifyNode'
@@ -181,6 +182,10 @@ export default abstract class BaseWrapper<
       }
 
       if (result && !(result instanceof Node)) {
+        // Vapor refs expose bindings without the public instance VueWrapper needs.
+        if (!(result as ComponentPublicInstance).$) {
+          throw new Error('Component discovery is not supported for Vapor')
+        }
         return createVueWrapper(null, result as ComponentPublicInstance)
       } else {
         return createWrapperError('VueWrapper')
@@ -191,7 +196,10 @@ export default abstract class BaseWrapper<
       matches(currentComponent.vnode, selector) &&
       this.element.contains(currentComponent.vnode.el as Node)
     ) {
-      const rootComponent = currentComponent.subTree.component
+      // a Vapor root component cannot be wrapped, keep the matched component
+      const rootComponent = isVaporInstance(currentComponent.subTree.component)
+        ? null
+        : currentComponent.subTree.component
       // a functional root component has no proxy, wrap it like findAllComponents does
       if (rootComponent && !rootComponent.proxy) {
         return createDOMWrapper(

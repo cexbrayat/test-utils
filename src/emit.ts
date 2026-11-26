@@ -68,6 +68,9 @@ export const recordEvent = (
   event: string,
   args: unknown[]
 ): void => {
+  // Vapor event recording is not supported yet.
+  if ('vapor' in vm) return
+
   // Functional component wrapper creates a parent component
   let wrapperVm = vm
   while (typeof wrapperVm?.type === 'function')

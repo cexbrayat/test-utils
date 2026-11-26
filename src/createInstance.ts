@@ -2,8 +2,10 @@ import type {
   AppConfig,
   ComponentOptions,
   ConcreteComponent,
-  DefineComponent
+  DefineComponent,
+  Plugin
 } from 'vue'
+import * as Vue from 'vue'
 import type { VNode } from 'vue'
 import {
   Comment,
@@ -54,7 +56,8 @@ const MOUNT_OPTIONS: ReadonlyArray<keyof MountingOptions<any>> = [
   'props',
   'slots',
   'global',
-  'shallow'
+  'shallow',
+  'experimentalVapor'
 ] as const
 
 function getInstanceOptions(
@@ -84,13 +87,69 @@ export function createInstance(
 ) {
   // normalize the incoming component
   const originalComponent = unwrapLegacyVueExtendComponent(inputComponent)
+  const isVapor = !!(originalComponent as any).__vapor
+  if (isVapor || options?.experimentalVapor) {
+    // Require both a compiled Vapor component and explicit opt-in so a VDOM
+    // fallback cannot silently pass as an experimental Vapor mount.
+    if (!isVapor || !options?.experimentalVapor) {
+      throw new Error('Mount Vapor components with experimentalVapor: true')
+    }
+    const setup =
+      typeof originalComponent === 'function'
+        ? originalComponent
+        : originalComponent.setup
+    // Vapor crashes when mounting an async setup without <Suspense>. As for
+    // VDOM, async setup must be mounted inside a <Suspense> parent instead.
+    if (setup?.constructor.name === 'AsyncFunction') {
+      throw new Error(
+        'Async Vapor setup is not supported by mount(); mount it inside <Suspense> instead'
+      )
+    }
+    // Reject unsupported VDOM mounting options rather than silently ignoring
+    // them. Only check this mount's options: inherited VDOM-only defaults are
+    // filtered out of the merged globals below.
+    const mountGlobal = options.global ?? {}
+    const unsupported = [
+      ...Object.keys(options).filter(
+        key =>
+          options[key] !== undefined &&
+          ![
+            'experimentalVapor',
+            'attachTo',
+            'attrs',
+            'props',
+            'propsData',
+            'global',
+            'shallow'
+          ].includes(key)
+      ),
+      options.shallow && 'shallow',
+      mountGlobal.mixins?.length && 'global.mixins',
+      Object.keys(mountGlobal.mocks ?? {}).length && 'global.mocks',
+      mountGlobal.renderStubDefaultSlot && 'global.renderStubDefaultSlot',
+      // Vapor directives are functions; VDOM object directives would be skipped.
+      Object.values(mountGlobal.directives ?? {}).some(
+        directive => typeof directive !== 'function'
+      ) && 'global.directives',
+      mountGlobal.stubs &&
+        Object.values(mountGlobal.stubs).some(Boolean) &&
+        'global.stubs'
+    ].filter(Boolean)
+    if (unsupported.length) {
+      throw new Error(
+        `Vapor mounting does not support: ${unsupported.join(', ')}`
+      )
+    }
+  }
   let component: ConcreteComponent
   const instanceOptions = getInstanceOptions(options ?? {})
 
   const rootComponents: CreateStubComponentsTransformerConfig['rootComponents'] =
     {}
 
-  if (
+  if (isVapor) {
+    component = originalComponent
+  } else if (
     isFunctionalComponent(originalComponent) ||
     isLegacyFunctionalComponent(originalComponent)
   ) {
@@ -195,7 +254,15 @@ export function createInstance(
   })
 
   const global = mergeGlobalProperties(options?.global)
-  if (isObjectComponent(component)) {
+  if (isVapor) {
+    // These VDOM-only defaults can still affect the VDOM host and component
+    // registration. Clear them on this mount's copy, not on config.global.
+    global.mixins = []
+    global.mocks = {}
+    global.stubs = {}
+    global.renderStubDefaultSlot = false
+  }
+  if (isObjectComponent(component) && !isVapor) {
     component.components = { ...component.components, ...global.components }
   }
 
@@ -314,6 +381,18 @@ export function createInstance(
     }
   }
 
+  if (isVapor && !(app as any)._context.vapor) {
+    // Look up the optional export without requiring it from Vue 3.5/CJS builds.
+    // A caller plugin may already have enabled interop on this app.
+    const interop = Reflect.get(Vue, 'vaporInteropPlugin') as Plugin | undefined
+    if (!interop) {
+      throw new Error(
+        'experimentalVapor requires Vue 3.6 ESM builds exporting vaporInteropPlugin (Vue and Test Utils Node builds have no Vapor support)'
+      )
+    }
+    app.use(interop)
+  }
+
   // use any mixins from mounting options
   if (global.mixins) {
     for (const mixin of global.mixins) app.mixin(mixin)
@@ -333,6 +412,9 @@ export function createInstance(
     for (const [key, directive] of Object.entries(global.directives))
       app.directive(key, directive)
   }
+
+  // Vapor blocks bypass VNode stubbing; leave other apps' transformers intact.
+  if (isVapor) return { app, props, componentRef }
 
   // stubs
   // even if we are using `mount`, we will still

@@ -37,6 +37,8 @@ jobs:
         env:
           CI: true
       - run: pnpm run test:build
+      - run: pnpm run test:vapor --run
+      - run: pnpm run test:vapor --mode test-build --run
       - run: pnpm run tsd
       - run: pnpm run vue-tsc
       - run: pnpm run tsc:docs
@@ -63,3 +65,7 @@ jobs:
         run: pnpm run test:browser --run
       - name: Test build in Chromium
         run: pnpm run test:browser:build --run
+      - name: Experimental Vapor in Chromium
+        run: pnpm run test:vapor:browser --run
+      - name: Experimental Vapor against the build in Chromium
+        run: pnpm run test:vapor:browser --mode test-build --run

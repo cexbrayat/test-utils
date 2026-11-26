@@ -46,6 +46,8 @@ type RawProps = VNodeProps & {
 } & Record<string, any>
 
 interface BaseMountingOptions<Props, Data = {}> {
+  /** Opt in to experimental Vapor DOM mounting and install Vue's interop plugin. */
+  experimentalVapor?: boolean
   /**
    * Overrides component's default data. Must be a function.
    * @see https://test-utils.vuejs.org/api/#data

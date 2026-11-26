@@ -6,7 +6,12 @@ import domEvents from './constants/dom-events'
 import type { VueElement, VueNode } from './types'
 import type { EmittedArgs, EmittedEventName } from './types'
 import { hasSetupState, mergeDeep } from './utils'
-import { getRootNodes } from './utils/getRootNodes'
+import {
+  type VaporInstance,
+  getRootNodes,
+  getVaporRootNodes,
+  isVaporInstance
+} from './utils/getRootNodes'
 import { emitted, recordEvent, removeEventHistory } from './emit'
 import BaseWrapper from './baseWrapper'
 import type { DOMWrapper } from './domWrapper'
@@ -183,6 +188,10 @@ export class VueWrapper<
         subTree.shapeFlag & ShapeFlags.FUNCTIONAL_COMPONENT
       ) {
         // We are rendering other component, check it's tree instead
+        if (isVaporInstance(subTree.component)) {
+          const instance = subTree.component as unknown as VaporInstance
+          return getVaporRootNodes(instance).length > 1
+        }
         if (subTree.component?.subTree) {
           return checkTree(subTree.component.subTree)
         }
